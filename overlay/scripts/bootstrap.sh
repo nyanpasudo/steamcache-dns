@@ -38,7 +38,7 @@ else
   fi
 fi
 
-echo "Bootstrapping DNS from https://github.com/uklans/cache-domains"
+echo "Bootstrapping DNS from https://github.com/nyanpasudo/cache-domains"
 
 if [ "$USE_GENERIC_CACHE" = "true" ]; then
     echo ""
@@ -132,7 +132,7 @@ cat services.json | jq -r '.cache_domains[] | .name, .domain_files[]' | while re
   else
 	if [ "$CONTINUE" == "true" ]; then
 
-      curl -s -o ${L} https://raw.githubusercontent.com/uklans/cache-domains/master/${L}
+      curl -s -o ${L} https://raw.githubusercontent.com/nyanpasudo/cache-domains/master/${L}
     	## files don't have a newline at the end
     	echo "" >> ${L}
 		cat ${L} | grep -v "^#" | while read URL; do
