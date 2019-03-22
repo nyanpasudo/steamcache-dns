@@ -89,7 +89,7 @@ echo "\$TTL 60
                           1H) ; minimum 
                   IN    NS    localhost." > $RPZ_ZONE
 
-curl -s -o services.json https://raw.githubusercontent.com/uklans/cache-domains/master/cache_domains.json
+curl -s -o services.json https://raw.githubusercontent.com/nyanpasudo/cache-domains/master/cache_domains.json
 
 cat services.json | jq -r '.cache_domains[] | .name, .domain_files[]' | while read L; do
   if ! echo ${L} | grep "\.txt" >/dev/null 2>&1 ; then
