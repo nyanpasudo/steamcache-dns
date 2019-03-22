@@ -1,10 +1,13 @@
 FROM alpine:latest
 MAINTAINER SteamCache.Net Team <team@steamcache.net>
 
-ENV STEAMCACHE_DNS_VERSION 1
+ENV STEAMCACHE_DNS_VERSION=1 ENABLE_DNSSEC_VALIDATION=false LANCACHE_DNSDOMAIN=cache.steamcache.net
 
-RUN	apk update			\
-	&& apk add bind		
+RUN	apk update && apk add			\
+		bind	\
+		bash	\
+		jq		\
+		curl	
 
 COPY	overlay/ /
 
@@ -17,4 +20,4 @@ EXPOSE 53/udp
 
 WORKDIR /scripts
 
-ENTRYPOINT ["/scripts/bootstrap.sh"]
+CMD ["bash", "/scripts/bootstrap.sh"]

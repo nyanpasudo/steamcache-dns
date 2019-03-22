@@ -1,138 +1,187 @@
-#!/bin/sh
+#/bin/bash
 
-# if [ -n "$STEAMCACHE_RESOLVE_NAME" ]
-# then
-# 	RESOLVED_IP="$(nslookup "$STEAMCACHE_RESOLVE_NAME" 2>/dev/null | grep 'Address' | awk '{ print $3 }')"
-# 	if [ -n "$RESOLVED_IP" ]
-# 	then
-# 		echo "Resolved ${STEAMCACHE_RESOLVE_NAME} to ${RESOLVED_IP}"
-# 		STEAMCACHE_IP="$RESOLVED_IP"
-# 	else
-# 		echo "Failed to resolve ${STEAMCACHE_RESOLVE_NAME}; using ${STEAMCACHE_IP} instead" >&2
-# 	fi
-# fi
+set -e
 
-# if [ -z "$STEAMCACHE_IP" ]
-# then
-# 	echo "No value in \$STEAMCACHE_IP!" >&2
-# 	exit 1
-# fi
+ZONEPATH="/etc/bind/cache/"
+ZONETEMPLATE="/etc/bind/cache/zone.tmpl"
+CACHECONF="/etc/bind/cache.conf"
+USE_GENERIC_CACHE="${USE_GENERIC_CACHE:-false}"
+LANCACHE_DNSDOMAIN="${LANCACHE_DNSDOMAIN:-cache.steamcache.net}"
+CACHE_ZONE="${ZONEPATH}$LANCACHE_DNSDOMAIN.db"
+RPZ_ZONE="${ZONEPATH}rpz.db"
 
-echo "Running bootstrap.sh..."
+echo "     _                                      _                       _   "
+echo "    | |                                    | |                     | |  "
+echo " ___| |_ ___  __ _ _ __ ___   ___ __ _  ___| |__   ___   _ __   ___| |_ "
+echo "/ __| __/ _ \\/ _\` | '_ \` _ \\ / __/ _\` |/ __| '_ \\ / _ \\ | '_ \\ / _ \\ __|"
+echo "\\__ \\ ||  __/ (_| | | | | | | (_| (_| | (__| | | |  __/_| | | |  __/ |_ "
+echo "|___/\\__\\___|\\__,_|_| |_| |_|\\___\\__,_|\\___|_| |_|\\___(_)_| |_|\\___|\\__|"
+echo ""
+echo ""
+if ! [ -z "${UPSTREAM_DNS}" ] ; then
+  echo "configuring /etc/resolv.conf to stop from looping to ourself"
+  echo "nameserver ${UPSTREAM_DNS}" > /etc/resolv.conf
+fi
+echo ""
+
+
 
 if [ "$USE_GENERIC_CACHE" = "true" ]; then
-	# We will use the generic cache IP for anything that is not defined.
+  if [ -z ${LANCACHE_IP} ]; then
+    echo "If you are using USE_GENERIC_CACHE then you must set LANCACHE_IP"
+    exit 1
+  fi
+else
+  if ! [ -z ${LANCACHE_IP} ]; then
+    echo "If you are using LANCACHE_IP then you must set USE_GENERIC_CACHE=true"
+    exit 1
+  fi
+fi
 
-	if [ -z "$LANCACHE_IP" ]; then
-		echo "USE_GENERIC_CACHE is true but LANCACHE_IP is not set. Ignoring Generic Cache"
+echo "Bootstrapping DNS from https://github.com/uklans/cache-domains"
+
+if [ "$USE_GENERIC_CACHE" = "true" ]; then
+    echo ""
+    echo "----------------------------------------------------------------------"
+    echo "Using Generic Server: ${LANCACHE_IP}"
+    echo "Make sure you are using a monolithic cache or load balancer at ${LANCACHE_IP}"
+    echo "----------------------------------------------------------------------"
+    echo ""
+fi
+
+rm -f ${CACHECONF}
+touch ${CACHECONF}
+
+#Add the rpz zones to the cache.conf
+echo "
+	zone \"$LANCACHE_DNSDOMAIN\" {
+		type master;
+		file \"$CACHE_ZONE\";
+	};
+    zone \"rpz\" {
+      type master;
+      file \"$RPZ_ZONE\";
+      allow-query { none; };
+    };" > ${CACHECONF}
+
+#Generate the SOA for cache.steamcache.net
+
+echo "\$ORIGIN $LANCACHE_DNSDOMAIN. 
+\$TTL    600
+@       IN  SOA localhost. dns.steamcache.net. (
+             $(date +%s)
+             604800
+             600
+             600
+             600 )
+@       IN  NS  localhost.
+
+" > $CACHE_ZONE
+
+#Generate the RPZ zone file
+
+echo "\$TTL 60
+@            IN    SOA  localhost. root.localhost.  (
+                          2   ; serial 
+                          3H  ; refresh 
+                          1H  ; retry 
+                          1W  ; expiry 
+                          1H) ; minimum 
+                  IN    NS    localhost." > $RPZ_ZONE
+
+curl -s -o services.json https://raw.githubusercontent.com/uklans/cache-domains/master/cache_domains.json
+
+cat services.json | jq -r '.cache_domains[] | .name, .domain_files[]' | while read L; do
+  if ! echo ${L} | grep "\.txt" >/dev/null 2>&1 ; then
+    SERVICE=${L}
+    SERVICEUC=`echo ${L} | tr [:lower:] [:upper:]`
+	echo "Processing service: $SERVICE"
+	CONTINUE=false
+	SERVICE_ENABLED=false
+	if [ "$USE_GENERIC_CACHE" = "true" ]; then
+    	if ! env | grep "DISABLE_${SERVICEUC}=true" >/dev/null 2>&1; then
+			SERVICE_ENABLED=true	
+		fi
 	else
-		if [ -z "$BLIZZARDCACHE_IP" ] && ! [ "$DISABLE_BLIZZARD" = "true" ]; then
-			BLIZZARDCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$FRONTIERCACHE_IP" ] && ! [ "$DISABLE_FRONTIER" = "true" ]; then
-			FRONTIERCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$ORIGINCACHE_IP" ] && ! [ "$DISABLE_ORIGIN" = "true" ]; then
-			ORIGINCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$RIOTCACHE_IP" ] && ! [ "$DISABLE_RIOT" = "true" ]; then
-			RIOTCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$STEAMCACHE_IP" ] && ! [ "$DISABLE_STEAM" = "true" ]; then
-			STEAMCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$UPLAYCACHE_IP" ] && ! [ "$DISABLE_UPLAY" = "true" ]; then
-			UPLAYCACHE_IP=$LANCACHE_IP
-		fi
-		if [ -z "$WINDOWSCACHE_IP" ] && ! [ "$DISABLE_WINDOWS" = "true" ]; then
-			WINDOWSCACHE_IP=$LANCACHE_IP
+		echo "testing for presence of ${SERVICEUC}CACHE_IP"
+    	if env | grep "${SERVICEUC}CACHE_IP" >/dev/null 2>&1; then
+			SERVICE_ENABLED=true
 		fi
 	fi
+	if [ "$SERVICE_ENABLED" == "true" ]; then
+    	if env | grep "${SERVICEUC}CACHE_IP" >/dev/null 2>&1; then
+    		C_IP=$(env | grep "${SERVICEUC}CACHE_IP=" | sed 's/.*=//')
+    	else
+    		C_IP=${LANCACHE_IP}
+    	fi
+		if [ "x$C_IP" != "x" ]; then
+			echo "Enabling service with ip(s): $C_IP";
+			for IP in $C_IP; do
+				echo "$SERVICE IN A $IP;" >> $CACHE_ZONE
+			done
+      		echo ";## ${SERVICE}" >> ${RPZ_ZONE}
+			CONTINUE=true
+		else
+			echo "Could not find IP for requested service: $SERVICE"
+			exit 1
+		fi
+	else
+		echo "Skipping $SERVICE"
+	fi
+
+  else
+	if [ "$CONTINUE" == "true" ]; then
+
+      curl -s -o ${L} https://raw.githubusercontent.com/uklans/cache-domains/master/${L}
+    	## files don't have a newline at the end
+    	echo "" >> ${L}
+		cat ${L} | grep -v "^#" | while read URL; do
+      		if [ "x${URL}" != "x" ] ; then
+				#RPZ entries do NOT need a trailing . on the rpz domain, but do for the redirect host
+				echo "${URL} IN CNAME $SERVICE.$LANCACHE_DNSDOMAIN.;" >> $RPZ_ZONE;
+      		fi
+    	done
+      rm ${L}
+    fi
+  fi
+done
+
+rm services.json
+
+echo ""
+echo " --- "
+echo ""
+
+if ! [ -z "${UPSTREAM_DNS}" ] ; then
+  sed -i "s/#ENABLE_UPSTREAM_DNS#//;s/dns_ip/${UPSTREAM_DNS}/" /etc/bind/named.conf.options
 fi
 
-## blizzard
-if ! [ -z "$BLIZZARDCACHE_IP" ]; then
-	echo "Enabling cache for Blizzard"
-	cp /etc/bind/cache/blizzard/template.db.blizzard /etc/bind/cache/blizzard/db.blizzard
-	sed -i -e "s%{{ blizzardcache_ip }}%$BLIZZARDCACHE_IP%g" /etc/bind/cache/blizzard/db.blizzard
-	sed -i -e "s%#ENABLE_BLIZZARD#%%g" /etc/bind/cache.conf
+if [ "${ENABLE_DNSSEC_VALIDATION}" = true ] ; then
+	echo "Enabling dnssec validation"
+	sed -i "s/dnssec-validation no/dnssec-validation auto/" /etc/bind/named.conf.options
 fi
 
-## frontier
-if ! [ -z "$FRONTIERCACHE_IP" ]; then
-	echo "Enabling cache for Frontier"
-	cp /etc/bind/cache/frontier/template.db.frontier /etc/bind/cache/frontier/db.frontier
-	sed -i -e "s%{{ frontiercache_ip }}%$FRONTIERCACHE_IP%g" /etc/bind/cache/frontier/db.frontier
-	sed -i -e "s%#ENABLE_FRONTIER#%%g" /etc/bind/cache.conf
-fi
+echo "finished bootstrapping."
 
-## origin
-if ! [ -z "$ORIGINCACHE_IP" ]; then
-	echo "Enabling cache for Origin"
-	cp /etc/bind/cache/origin/template.db.origin /etc/bind/cache/origin/db.origin
-	sed -i -e "s%{{ origincache_ip }}%$ORIGINCACHE_IP%g" /etc/bind/cache/origin/db.origin
-	sed -i -e "s%#ENABLE_ORIGIN#%%g" /etc/bind/cache.conf
-fi
-
-## riot
-if ! [ -z "$RIOTCACHE_IP" ]; then
-	echo "Enabling cache for Riot"
-	cp /etc/bind/cache/riot/template.db.riot /etc/bind/cache/riot/db.riot
-	sed -i -e "s%{{ riotcache_ip }}%$RIOTCACHE_IP%g" /etc/bind/cache/riot/db.riot
-	sed -i -e "s%#ENABLE_RIOT#%%g" /etc/bind/cache.conf
-fi
-
-## steam
-if ! [ -z "$STEAMCACHE_IP" ]; then
-	echo "Enabling cache for Steam"
-	cp /etc/bind/cache/steam/template.db.content_.steampowered.com /etc/bind/cache/steam/db.content_.steampowered.com
-	cp /etc/bind/cache/steam/template.db.cs.steampowered.com /etc/bind/cache/steam/db.cs.steampowered.com
-	cp /etc/bind/cache/steam/template.db.steamcontent.com /etc/bind/cache/steam/db.steamcontent.com
-	sed -i -e "s%{{ steamcache_ip }}%$STEAMCACHE_IP%g" /etc/bind/cache/steam/db.content_.steampowered.com
-	sed -i -e "s%{{ steamcache_ip }}%$STEAMCACHE_IP%g" /etc/bind/cache/steam/db.cs.steampowered.com
-	sed -i -e "s%{{ steamcache_ip }}%$STEAMCACHE_IP%g" /etc/bind/cache/steam/db.steamcontent.com
-	sed -i -e "s%#ENABLE_STEAM#%%g" /etc/bind/cache.conf
-fi
-
-## uplay
-if ! [ -z "$UPLAYCACHE_IP" ]; then
-	echo "Enabling cache for Uplay"
-	cp /etc/bind/cache/uplay/template.db.uplay /etc/bind/cache/uplay/db.uplay
-	sed -i -e "s%{{ uplaycache_ip }}%$UPLAYCACHE_IP%g" /etc/bind/cache/uplay/db.uplay
-	sed -i -e "s%#ENABLE_UPLAY#%%g" /etc/bind/cache.conf
-fi
-
-## windows
-if ! [ -z "$WINDOWSCACHE_IP" ]; then
-	echo "Enabling cache for Windows"
-	cp /etc/bind/cache/windows/template.db.windows /etc/bind/cache/windows/db.windows
-	sed -i -e "s%{{ windowscache_ip }}%$WINDOWSCACHE_IP%g" /etc/bind/cache/windows/db.windows
-	sed -i -e "s%#ENABLE_WINDOWS#%%g" /etc/bind/cache.conf
-fi
-
-## custom upstream forwarder
-if ! [ -z "$UPSTREAM_DNS" ]; then
-        echo "Enabling custom DNS forwarder"
-	sed -i -e "s%dns_ip%$UPSTREAM_DNS%g" /etc/bind/named.conf.options
-	sed -i -e "s%#ENABLE_UPSTREAM_DNS#%%g" /etc/bind/named.conf.options
-fi
-
-
-echo "bootstrap finished."
+echo ""
+echo " --- "
+echo ""
 
 echo "checking Bind9 config"
 
 if ! /usr/sbin/named-checkconf /etc/bind/named.conf ; then
-	echo "Problem with Bind9 configuration - Bailing" >&2
-	exit 1
+    echo "Problem with Bind9 configuration - Bailing" >&2
+    exit 1
 fi
 
 echo "Running Bind9"
+
+tail -F /var/log/named/general.log /var/log/named/default.log /var/log/named/queries.log  &
 
 /usr/sbin/named -u named -c /etc/bind/named.conf -f
 BEC=$?
 
 if ! [ $BEC = 0 ]; then
-	echo "Bind9 exited with ${BEC}"
-	exit ${BEC} #exit with the same exit code as bind9
+    echo "Bind9 exited with ${BEC}"
+    exit ${BEC} #exit with the same exit code as bind9
 fi
